@@ -1,0 +1,17 @@
+{
+  "name": "construction-truck-game",
+  "version": "1.0.0",
+  "description": "A 3D construction truck game with magnetic head using Three.js",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "^0.161.0"
+  },
+  "devDependencies": {
+    "vite": "^5.0.12"
+  }
+} 
