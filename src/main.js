@@ -554,6 +554,8 @@ function animate() {
         chainGroup.visible = true;
         wreckingBall.visible = true;
         updateChainPhysics();
+        // Check for building collisions
+        checkBuildingCollisions();
     } else {
         chainGroup.visible = false;
         wreckingBall.visible = false;
@@ -662,6 +664,17 @@ function createTree(x, z) {
     trunk.castShadow = true;
     trunk.receiveShadow = true;
     tree.add(trunk);
+    
+    // Add horizontal branch for swing
+    const branchGeometry = new THREE.CylinderGeometry(0.3, 0.3, 4, 8);
+    const branchMaterial = new THREE.MeshStandardMaterial({ color: 0x8B5A2B });
+    const branch = new THREE.Mesh(branchGeometry, branchMaterial);
+    branch.position.set(0, 8, 2); // Position branch at height 8, extending forward
+    branch.rotation.z = Math.PI / 2; // Rotate to make it horizontal
+    branch.castShadow = true;
+    branch.receiveShadow = true;
+    tree.add(branch);
+    
     // Foliage
     const foliage = new THREE.Mesh(
         new THREE.SphereGeometry(2 * 2, 12, 12),
@@ -807,24 +820,276 @@ function createBasketballCourt(x, z) {
 // --- Add basketball court at (60, 0, 60) ---
 createBasketballCourt(60, 60);
 
+// --- Buildings array to track destructible buildings ---
+const buildings = [];
+
+// --- Building creation function ---
+function createBuilding(x, z, height, width = 4, depth = 4, color = 0x8B4513) {
+    const buildingGroup = new THREE.Group();
+    
+    // Building base
+    const buildingGeometry = new THREE.BoxGeometry(width, height, depth);
+    const buildingMaterial = new THREE.MeshStandardMaterial({ 
+        color: color,
+        metalness: 0.3,
+        roughness: 0.7
+    });
+    const building = new THREE.Mesh(buildingGeometry, buildingMaterial);
+    building.position.y = height / 2;
+    building.castShadow = true;
+    building.receiveShadow = true;
+    buildingGroup.add(building);
+    
+    // Add windows
+    const windowGeometry = new THREE.PlaneGeometry(0.8, 0.8);
+    const windowMaterial = new THREE.MeshStandardMaterial({
+        color: 0x87CEEB,
+        metalness: 0.8,
+        roughness: 0.2
+    });
+    
+    // Front and back windows
+    for (let i = 0; i < Math.floor(height / 2); i++) {
+        for (let j = -1; j <= 1; j += 2) {
+            const window = new THREE.Mesh(windowGeometry, windowMaterial);
+            window.position.set(j * 0.8, (i + 0.5) * 2, depth / 2 + 0.01);
+            buildingGroup.add(window);
+            
+            const windowBack = window.clone();
+            windowBack.position.z = -depth / 2 - 0.01;
+            windowBack.rotation.y = Math.PI;
+            buildingGroup.add(windowBack);
+        }
+    }
+    
+    // Side windows
+    for (let i = 0; i < Math.floor(height / 2); i++) {
+        for (let j = -1; j <= 1; j += 2) {
+            const window = new THREE.Mesh(windowGeometry, windowMaterial);
+            window.position.set(width / 2 + 0.01, (i + 0.5) * 2, j * 0.8);
+            window.rotation.y = Math.PI / 2;
+            buildingGroup.add(window);
+            
+            const windowLeft = window.clone();
+            windowLeft.position.x = -width / 2 - 0.01;
+            windowLeft.rotation.y = -Math.PI / 2;
+            buildingGroup.add(windowLeft);
+        }
+    }
+    
+    // Position the building
+    buildingGroup.position.set(x, 0, z);
+    scene.add(buildingGroup);
+    
+    // Add to buildings array for collision detection
+    const buildingData = {
+        group: buildingGroup,
+        mesh: building,
+        originalPosition: { x, y: 0, z },
+        originalMaterial: buildingMaterial.clone(),
+        destroyed: false,
+        resetTimer: null,
+        boundingBox: new THREE.Box3().setFromObject(buildingGroup)
+    };
+    buildings.push(buildingData);
+    
+    return buildingGroup;
+}
+
+// --- Create various buildings around the scene ---
+// Tall buildings
+createBuilding(-25, -25, 20, 6, 6, 0x8B4513); // Tall brown building
+createBuilding(-35, -15, 25, 5, 5, 0x696969); // Tall gray building
+createBuilding(-45, -35, 18, 4, 4, 0xA0522D); // Medium brown building
+createBuilding(30, -30, 22, 7, 7, 0x2F4F4F); // Tall dark gray building
+createBuilding(40, -20, 15, 5, 5, 0x8B4513); // Medium brown building
+
+// Short buildings
+createBuilding(-20, 25, 8, 6, 6, 0xD2691E); // Short orange building
+createBuilding(-30, 35, 10, 4, 4, 0xCD853F); // Short tan building
+createBuilding(-40, 25, 6, 5, 5, 0x8FBC8F); // Short green building
+createBuilding(25, 25, 12, 6, 6, 0x9370DB); // Short purple building
+createBuilding(35, 35, 9, 4, 4, 0xDC143C); // Short red building
+createBuilding(45, 25, 7, 5, 5, 0xFF6347); // Short orange building
+
+// --- Building collision detection function ---
+function checkBuildingCollisions() {
+    if (gameState.attachmentMode !== 'wreckingBall' || !wreckingBall.visible) return;
+    
+    const wreckingBallPosition = wreckingBall.position.clone();
+    const wreckingBallRadius = 1.2 * 2; // Same as wrecking ball geometry radius
+    
+    buildings.forEach(buildingData => {
+        if (buildingData.destroyed) return;
+        
+        // Update bounding box
+        buildingData.boundingBox.setFromObject(buildingData.group);
+        
+        // Simple sphere-box collision detection
+        const closestPoint = buildingData.boundingBox.clampPoint(wreckingBallPosition, new THREE.Vector3());
+        const distance = wreckingBallPosition.distanceTo(closestPoint);
+        
+        if (distance < wreckingBallRadius) {
+            // Building hit! Destroy it
+            destroyBuilding(buildingData);
+        }
+    });
+}
+
+// --- Building destruction function ---
+function destroyBuilding(buildingData) {
+    if (buildingData.destroyed) return;
+    
+    buildingData.destroyed = true;
+    
+    // Hide the building
+    buildingData.group.visible = false;
+    
+    // Create destruction effect (debris particles)
+    createDestructionEffect(buildingData.group.position);
+    
+    // Schedule reset after 5 seconds
+    buildingData.resetTimer = setTimeout(() => {
+        resetBuilding(buildingData);
+    }, 5000);
+}
+
+// --- Building reset function ---
+function resetBuilding(buildingData) {
+    buildingData.destroyed = false;
+    buildingData.group.visible = true;
+    buildingData.resetTimer = null;
+    
+    // Reset position (in case it was moved)
+    buildingData.group.position.set(
+        buildingData.originalPosition.x, 
+        buildingData.originalPosition.y, 
+        buildingData.originalPosition.z
+    );
+}
+
+// --- Destruction effect function ---
+function createDestructionEffect(position) {
+    const debrisCount = 15;
+    const debris = [];
+    
+    for (let i = 0; i < debrisCount; i++) {
+        const debrisGeometry = new THREE.BoxGeometry(
+            Math.random() * 0.5 + 0.2,
+            Math.random() * 0.5 + 0.2,
+            Math.random() * 0.5 + 0.2
+        );
+        const debrisMaterial = new THREE.MeshStandardMaterial({
+            color: Math.random() * 0xffffff,
+            roughness: 0.8
+        });
+        const debrisPiece = new THREE.Mesh(debrisGeometry, debrisMaterial);
+        
+        debrisPiece.position.copy(position);
+        debrisPiece.position.add(new THREE.Vector3(
+            (Math.random() - 0.5) * 4,
+            Math.random() * 3,
+            (Math.random() - 0.5) * 4
+        ));
+        
+        debrisPiece.castShadow = true;
+        scene.add(debrisPiece);
+        
+        // Add physics properties
+        debrisPiece.velocity = new THREE.Vector3(
+            (Math.random() - 0.5) * 0.3,
+            Math.random() * 0.2 + 0.1,
+            (Math.random() - 0.5) * 0.3
+        );
+        
+        debris.push(debrisPiece);
+    }
+    
+    // Animate debris falling
+    let animationFrames = 0;
+    const maxFrames = 120; // 2 seconds at 60fps
+    
+    function animateDebris() {
+        animationFrames++;
+        
+        debris.forEach(piece => {
+            piece.position.add(piece.velocity);
+            piece.velocity.y -= 0.01; // gravity
+            piece.rotation.x += piece.velocity.x;
+            piece.rotation.y += piece.velocity.y;
+            piece.rotation.z += piece.velocity.z;
+            
+            // Fade out
+            piece.material.opacity = 1 - (animationFrames / maxFrames);
+            piece.material.transparent = true;
+        });
+        
+        if (animationFrames < maxFrames) {
+            requestAnimationFrame(animateDebris);
+        } else {
+            // Clean up debris
+            debris.forEach(piece => scene.remove(piece));
+        }
+    }
+    
+    animateDebris();
+}
+
 // --- Swing creation function ---
 function addSwingToTree(tree) {
-    // Ropes
+    // Shorter ropes - hanging from the branch
+    const ropeLength = 6; // Shorter ropes since hanging from branch at height 8
     const leftRope = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.05 * 2, 0.05 * 2, 3 * 2, 8),
-        new THREE.MeshStandardMaterial({ color: 0xaaaaaa })
+        new THREE.CylinderGeometry(0.05 * 2, 0.05 * 2, ropeLength, 8),
+        new THREE.MeshStandardMaterial({ color: 0x8B4513 }) // Brown rope color
     );
-    leftRope.position.set(-1, 10.5, 1.4);
+    leftRope.position.set(-1.5, 8 - ropeLength/2, 2); // Hanging from branch position
     // Right rope
     const rightRope = leftRope.clone();
-    rightRope.position.x = 1;
-    // Seat
-    const seat = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2 * 2, 0.2 * 2, 0.4 * 2),
-        new THREE.MeshStandardMaterial({ color: 0x654321 })
+    rightRope.position.x = 1.5;
+    
+    // Wooden platform hanging from the branch
+    const platform = new THREE.Mesh(
+        new THREE.BoxGeometry(3, 0.3, 1.5), // Larger wooden platform
+        new THREE.MeshStandardMaterial({ 
+            color: 0x8B4513, // Wood brown color
+            roughness: 0.8,
+            metalness: 0.1
+        })
     );
-    seat.position.set(0, 9, 1.4);
-    tree.add(leftRope, rightRope, seat);
+    platform.position.set(0, 8 - ropeLength, 2); // Platform hanging from branch
+    platform.castShadow = true;
+    platform.receiveShadow = true;
+    
+    // Add wooden planks texture to the platform
+    const plankGeometry = new THREE.BoxGeometry(2.8, 0.05, 0.2);
+    const plankMaterial = new THREE.MeshStandardMaterial({ 
+        color: 0x654321,
+        roughness: 0.9,
+        metalness: 0.0
+    });
+    
+    // Create individual planks on the platform
+    for (let i = -3; i <= 3; i++) {
+        const plank = new THREE.Mesh(plankGeometry, plankMaterial);
+        plank.position.set(0, 0.2, i * 0.25);
+        plank.castShadow = true;
+        platform.add(plank);
+    }
+    
+    // Add rope attachment points on the platform
+    const attachmentGeometry = new THREE.CylinderGeometry(0.1, 0.1, 0.2, 8);
+    const attachmentMaterial = new THREE.MeshStandardMaterial({ color: 0x444444 });
+    
+    const leftAttachment = new THREE.Mesh(attachmentGeometry, attachmentMaterial);
+    leftAttachment.position.set(-1.5, 0.25, 0);
+    platform.add(leftAttachment);
+    
+    const rightAttachment = new THREE.Mesh(attachmentGeometry, attachmentMaterial);
+    rightAttachment.position.set(1.5, 0.25, 0);
+    platform.add(rightAttachment);
+    
+    tree.add(leftRope, rightRope, platform);
 }
 
 // --- Add swing to the first tree created ---
